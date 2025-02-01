@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2FA 生成器</title>
+</head>
+<body>
+    <h2>基于时间的一次性密码 (TOTP)</h2>
+    <input type="text" id="secret" placeholder="输入密钥">
+    <button onclick="generateCode()">生成验证码</button>
+    <p id="code"></p>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/otplib/12.0.1/otplib-browser.min.js"></script>
+    <script>
+        function generateCode() {
+            const secret = document.getElementById("secret").value;
+            if (!secret) {
+                alert("请输入密钥！");
+                return;
+            }
+            const token = window.otplib.authenticator.generate(secret);
+            document.getElementById("code").textContent = "验证码：" + token;
+        }
+    </script>
+</body>
+</html>
