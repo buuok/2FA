@@ -2,50 +2,82 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>TOTP 整合版 (静音自动播放 + 点击后开声)</title>
+  <title>TOTP 优化版</title>
+
+  <!-- 引入 Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+
   <style>
-    /* 背景图片 */
+    /* 全局样式 */
+    /* 优先使用Inter字体，若不可用则使用系统常见字体作后备 */
+    * {
+      box-sizing: border-box;
+    }
     body {
-      font-family: Arial, sans-serif;
-      background: url("./assets/bg.jpg") no-repeat center center fixed;
-      background-size: cover;
       margin: 0;
       padding: 0;
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      /* 柔和渐变背景，如果想用图片可改为 background: url(...) no-repeat center center / cover; */
+      background: linear-gradient(135deg, #ebf8ff 0%, #e0f7fa 100%);
+      /* 若仍想叠加背景图片，可加一层 pseudo 元素或使用多重 background  */
     }
+
+    /* 容器 */
     .container {
-      max-width: 450px;
-      margin: 40px auto;
-      background: rgba(255, 255, 255, 0.9);
-      box-shadow: 0 0 8px rgba(0,0,0,0.1);
-      border-radius: 8px;
-      padding: 20px;
+      max-width: 480px;
+      margin: 60px auto;
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+      padding: 30px;
       text-align: center;
+      animation: fadeIn 0.7s ease forwards;
     }
+
+    /* 简单的淡入动画 */
+    @keyframes fadeIn {
+      from {opacity: 0; transform: translateY(20px);}
+      to {opacity: 1; transform: translateY(0);}
+    }
+
     h1 {
+      font-size: 1.5rem;
       margin-top: 0;
       color: #333;
+      font-weight: 600;
+      margin-bottom: 1.2rem;
     }
+
     input {
-      width: 70%;
-      padding: 10px;
+      width: 80%;
+      padding: 12px;
       font-size: 1rem;
-      margin-bottom: 10px;
+      margin-bottom: 20px;
       border: 1px solid #ccc;
       border-radius: 4px;
+      outline: none;
+      transition: border-color 0.2s;
     }
+    input:focus {
+      border-color: #80bfff;
+    }
+
     button {
-      padding: 10px 20px;
+      padding: 12px 24px;
       font-size: 1rem;
-      background: #007bff;
       color: #fff;
+      background: #007bff;
       border: none;
       border-radius: 4px;
       cursor: pointer;
-      margin-bottom: 10px;
+      transition: background 0.2s;
+      outline: none;
     }
     button:hover {
       background: #0056b3;
     }
+
     #code {
       font-size: 2.2rem;
       font-weight: bold;
@@ -56,51 +88,60 @@
     #error {
       color: red;
       min-height: 1.5em;
+      margin-bottom: 8px;
     }
+    #copy-msg {
+      color: green;
+      min-height: 1.5em;
+      margin-top: 4px;
+      margin-bottom: 10px;
+      font-size: 0.9rem;
+    }
+
+    /* 进度条容器 */
     .progress-wrapper {
       position: relative;
       height: 10px;
       width: 100%;
       background: #e9ecef;
-      border-radius: 5px;
+      border-radius: 6px;
       overflow: hidden;
       margin-top: 20px;
     }
+
+    /* 进度条本体 */
     .progress-bar {
       height: 10px;
       width: 100%;
-      background: linear-gradient(to right, #007bff, #00d4ff);
+      background: linear-gradient(to right, #00b4ff, #00ffcc);
       transform-origin: left center;
       transition: transform 0.2s ease-out;
     }
+
+    /* 倒计时文字 */
     .timer-text {
-      margin-top: 5px;
+      margin-top: 8px;
       color: #666;
       font-size: 0.9rem;
     }
-    #copy-msg {
-      color: green;
-      min-height: 1.5em;
-      margin-top: 5px;
-      font-size: 0.9rem;
-    }
+
     footer {
       text-align: center;
-      margin-top: 20px;
-      color: #aaa;
+      margin-top: 40px;
+      color: #888;
       font-size: 0.8rem;
     }
   </style>
 </head>
 <body>
 
-  <!-- 注意这里：muted + autoplay + loop -->
+  <!-- 静音自动播放音乐，如不需要可删除 -->
   <audio id="bgMusic" src="./assets/music.mp3" preload="auto" autoplay muted loop></audio>
 
   <div class="container">
-    <h1>TOTP 整合版 (静音自动播放)</h1>
+    <h1>在线 2FA (TOTP)</h1>
 
-    <input type="text" id="secret" placeholder="在此输入Base32密钥 (可含空格)" />
+    <input type="text" id="secret" placeholder="在此输入 Base32 密钥" />
     <br />
     <button onclick="start()">开始生成 TOTP</button>
 
@@ -119,12 +160,11 @@
   </footer>
 
   <script>
-    /* 
-      该脚本包含：
-      1) 纯JS HMAC-SHA1 (避免 Web Crypto 依赖)
-      2) 每秒倒计时 & 30秒换一次 TOTP
-      3) 自动复制 TOTP
-      4) 背景音乐: 静音自动播放 + 点击按钮后取消静音
+    /*
+      1) 纯JS HMAC-SHA1 TOTP
+      2) 30秒自动刷新 + 进度条
+      3) 自动复制
+      4) 静音自动播放音乐, 点击后开声
     */
 
     const period = 30;
@@ -138,13 +178,10 @@
       let bits = 0;
       let value = 0;
       const output = [];
-
       for (let i = 0; i < b32.length; i++) {
         const c = b32[i];
         const index = alphabet.indexOf(c);
-        if (index < 0) {
-          throw new Error("Base32 含非法字符: " + c);
-        }
+        if (index < 0) throw new Error("Base32 含非法字符: " + c);
         value = (value << 5) | index;
         bits += 5;
         if (bits >= 8) {
@@ -156,9 +193,7 @@
     }
 
     // ====== 纯JS SHA-1 ======
-    function rotateLeft(n, s) {
-      return (n << s) | (n >>> (32 - s));
-    }
+    function rotateLeft(n, s) { return (n << s) | (n >>> (32 - s)); }
     function toHex(val) {
       let s = "";
       for (let i = 7; i >= 0; i--) {
@@ -201,39 +236,24 @@
           );
           break;
       }
-      while ((wordArray.length % 16) !== 14) {
-        wordArray.push(0);
-      }
+      while ((wordArray.length % 16) != 14) wordArray.push(0);
       wordArray.push(msgLength >>> 29);
       wordArray.push((msgLength << 3) & 0x0ffffffff);
 
-      let H0 = 0x67452301;
-      let H1 = 0xefcdab89;
-      let H2 = 0x98badcfe;
-      let H3 = 0x10325476;
-      let H4 = 0xc3d2e1f0;
-
+      let H0 = 0x67452301, H1 = 0xefcdab89, H2 = 0x98badcfe, H3 = 0x10325476, H4 = 0xc3d2e1f0;
       for (let i = 0; i < wordArray.length; i += 16) {
         const W = new Array(80);
-        for (let j = 0; j < 16; j++) {
-          W[j] = wordArray[i + j];
-        }
+        for (let j = 0; j < 16; j++) W[j] = wordArray[i + j];
         for (let j = 16; j < 80; j++) {
           W[j] = rotateLeft(W[j - 3] ^ W[j - 8] ^ W[j - 14] ^ W[j - 16], 1);
         }
-
         let A = H0, B = H1, C = H2, D = H3, E = H4;
         for (let j = 0; j < 80; j++) {
           let temp;
-          if (j < 20) {
-            temp = ((B & C) | (~B & D)) + 0x5a827999;
-          } else if (j < 40) {
-            temp = (B ^ C ^ D) + 0x6ed9eba1;
-          } else if (j < 60) {
-            temp = ((B & C) | (B & D) | (C & D)) + 0x8f1bbcdc;
-          } else {
-            temp = (B ^ C ^ D) + 0xca62c1d6;
-          }
+          if (j < 20) temp = ((B & C) | (~B & D)) + 0x5a827999;
+          else if (j < 40) temp = (B ^ C ^ D) + 0x6ed9eba1;
+          else if (j < 60) temp = ((B & C) | (B & D) | (C & D)) + 0x8f1bbcdc;
+          else temp = (B ^ C ^ D) + 0xca62c1d6;
           temp = (rotateLeft(A, 5) + temp + E + W[j]) & 0x0ffffffff;
           E = D; D = C; C = rotateLeft(B, 30); B = A; A = temp;
         }
@@ -251,21 +271,20 @@
       return digestBytes;
     }
 
-    // ====== HMAC-SHA1 ======
+    // ====== 纯JS HMAC-SHA1 ======
     function hmacSha1(keyBytes, msgBytes) {
       const blockSize = 64;
       let key = keyBytes;
-      if (key.length > blockSize) {
-        key = sha1(key);
-      }
+      if (key.length > blockSize) key = sha1(key);
+
       const oKeyPad = new Uint8Array(blockSize);
       const iKeyPad = new Uint8Array(blockSize);
-
       for (let i = 0; i < blockSize; i++) {
         const b = i < key.length ? key[i] : 0;
         oKeyPad[i] = b ^ 0x5c;
         iKeyPad[i] = b ^ 0x36;
       }
+
       const iPadMsg = new Uint8Array(iKeyPad.length + msgBytes.length);
       iPadMsg.set(iKeyPad);
       iPadMsg.set(msgBytes, iKeyPad.length);
@@ -277,7 +296,7 @@
       return sha1(oPadIH);
     }
 
-    // ====== 生成 TOTP (6位) ======
+    // ====== 生成 TOTP ======
     function generateTOTP(secretB32) {
       const sanitized = secretB32.replace(/\s+/g, "").toUpperCase();
       const keyBytes = base32Decode(sanitized);
@@ -289,16 +308,15 @@
       let tmp = timeStep;
       for (let i = 7; i >= 0; i--) {
         msg[i] = tmp & 0xff;
-        tmp = tmp >> 8;
+        tmp >>= 8;
       }
 
       const hmacRes = hmacSha1(keyBytes, msg);
       const offset = hmacRes[hmacRes.length - 1] & 0x0f;
-      const binary =
-        ((hmacRes[offset] & 0x7f) << 24) |
-        ((hmacRes[offset + 1] & 0xff) << 16) |
-        ((hmacRes[offset + 2] & 0xff) << 8) |
-        (hmacRes[offset + 3] & 0xff);
+      const binary = ((hmacRes[offset] & 0x7f) << 24) |
+                     ((hmacRes[offset + 1] & 0xff) << 16) |
+                     ((hmacRes[offset + 2] & 0xff) << 8) |
+                     (hmacRes[offset + 3] & 0xff);
 
       const otp = (binary % 1000000).toString().padStart(6, "0");
       return { otp, timeStep };
@@ -309,6 +327,7 @@
       if (navigator.clipboard && window.isSecureContext) {
         return navigator.clipboard.writeText(text);
       } else {
+        // 回退
         const textArea = document.createElement("textarea");
         textArea.value = text;
         document.body.appendChild(textArea);
@@ -319,16 +338,18 @@
       }
     }
 
-    // ====== 主要循环, 每秒更新 ======
+    // ====== 每秒更新界面 ======
+    let currentTimeStep = -1;
+    let lastOTP = "";
+
     function updateUI() {
-      const secretEl = document.getElementById("secret");
+      const secretRaw = document.getElementById("secret").value.trim();
       const codeEl = document.getElementById("code");
       const errorEl = document.getElementById("error");
       const copyMsgEl = document.getElementById("copy-msg");
       const timerTextEl = document.getElementById("timer-text");
       const progressBarEl = document.getElementById("progress-bar");
 
-      const secretRaw = secretEl.value.trim();
       if (!secretRaw) {
         codeEl.textContent = "尚未生成";
         errorEl.textContent = "请先输入密钥";
@@ -343,10 +364,11 @@
       const secInCycle = nowSec % period;
       const timeLeft = period - secInCycle;
 
+      // 进度条从1 -> 0
       progressBarEl.style.transform = `scaleX(${timeLeft / period})`;
       timerTextEl.textContent = `剩余 ${timeLeft} 秒刷新`;
 
-      // 若进入新30s周期 => 生成新 TOTP
+      // 如果进入新周期 => 生成新 TOTP
       if (step !== currentTimeStep) {
         try {
           const { otp, timeStep } = generateTOTP(secretRaw);
@@ -373,13 +395,13 @@
       }
     }
 
-    // ====== 用户点击「开始」 => 取消静音 + 开启循环 ======
+    // ====== 启动 ======
     function start() {
+      // 取消静音并播放（如果你想用户主动决定，可留一个按钮）
       const bgMusic = document.getElementById("bgMusic");
-      // 取消静音, 并调用 play()
       bgMusic.muted = false;
-      bgMusic.play().catch((err) => {
-        console.warn("尝试取消静音播放时出错:", err);
+      bgMusic.play().catch(err => {
+        console.warn("音乐播放被阻止:", err);
       });
 
       if (intervalId) clearInterval(intervalId);
@@ -389,6 +411,7 @@
       updateUI();
       intervalId = setInterval(updateUI, 1000);
     }
+    let intervalId = null;
   </script>
 </body>
 </html>
