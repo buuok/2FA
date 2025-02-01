@@ -1,55 +1,86 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>2FA 验证码生成器</title>
-    <script src="https://cdn.jsdelivr.net/npm/otplib@12.0.1"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
+  <meta charset="UTF-8">
+  <title>TOTP 2FA 生成器</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    input, button { padding: 8px; margin: 5px 0; }
+    #qrcode { margin-top: 15px; }
+  </style>
 </head>
-<body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-white flex justify-center items-center h-screen">
+<body>
+  <h1>TOTP 双因素认证生成器</h1>
+  <div>
+    <label for="secretInput">输入你的密钥（或点击生成）：</label><br>
+    <input type="text" id="secretInput" placeholder="例如：JBSWY3DPEHPK3PXP" size="30">
+    <button id="generateSecret">生成随机密钥</button>
+  </div>
+  <div>
+    <button id="generateToken">生成 TOTP</button>
+    <p>当前 TOTP: <span id="tokenDisplay">--</span></p>
+  </div>
+  <div>
+    <button id="generateQR">生成绑定二维码</button>
+    <div id="qrcode"></div>
+  </div>
 
-    <div class="bg-white dark:bg-gray-800 shadow-lg rounded-xl p-6 w-96 text-center">
-        <h2 class="text-2xl font-bold mb-4">2FA 验证码生成器</h2>
-        
-        <input type="text" id="secret" placeholder="请输入 2FA 密钥" 
-            class="w-full px-4 py-2 mb-4 border rounded-lg dark:bg-gray-700 dark:border-gray-600 focus:outline-none">
-        
-        <p class="text-lg font-semibold">当前验证码：</p>
-        <p id="code" class="text-3xl font-bold text-blue-500 my-3">------</p>
-        
-        <p id="countdown" class="text-sm text-gray-500">下次更新：30 秒</p>
+  <!-- 引入 otplib 库（使用 CDN） -->
+  <script src="https://unpkg.com/otplib@12.0.1/otplib-browser.min.js"></script>
+  <!-- 引入 QRCode.js（使用 CDN） -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- 主逻辑 -->
+  <script>
+    // 随机生成一个密钥（可以根据需要调整长度）
+    function generateRandomSecret(length = 16) {
+      const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; // Base32 字符集
+      let result = '';
+      for (let i = 0; i < length; i++) {
+        result += charset.charAt(Math.floor(Math.random() * charset.length));
+      }
+      return result;
+    }
 
-        <button onclick="generateCode()" 
-            class="w-full mt-4 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 rounded-lg">
-            手动刷新
-        </button>
-    </div>
+    // 当点击生成随机密钥时
+    document.getElementById('generateSecret').addEventListener('click', () => {
+      const secret = generateRandomSecret();
+      document.getElementById('secretInput').value = secret;
+    });
 
-    <script>
-        function generateCode() {
-            const secret = document.getElementById("secret").value.trim();
-            if (!secret) {
-                document.getElementById("code").textContent = "------";
-                return;
-            }
-            try {
-                const token = otplib.authenticator.generate(secret); // 直接使用 otplib
-                document.getElementById("code").textContent = token;
-            } catch (error) {
-                console.error("密钥错误:", error);
-                document.getElementById("code").textContent = "无效密钥";
-            }
-        }
+    // 当点击生成 TOTP 时
+    document.getElementById('generateToken').addEventListener('click', () => {
+      const secret = document.getElementById('secretInput').value.trim();
+      if (!secret) {
+        alert('请先输入或生成密钥');
+        return;
+      }
+      // 使用 otplib 的 authenticator 模块生成 TOTP
+      const token = otplib.authenticator.generate(secret);
+      document.getElementById('tokenDisplay').textContent = token;
+    });
 
-        function updateTimer() {
-            let timeLeft = 30 - (Math.floor(Date.now() / 1000) % 30);
-            document.getElementById("countdown").textContent = `下次更新：${timeLeft} 秒`;
-            if (timeLeft === 30) generateCode();
-        }
-
-        setInterval(updateTimer, 1000);
-    </script>
-
+    // 当点击生成二维码时
+    document.getElementById('generateQR').addEventListener('click', () => {
+      const secret = document.getElementById('secretInput').value.trim();
+      if (!secret) {
+        alert('请先输入或生成密钥');
+        return;
+      }
+      // 构造 OTP Auth 协议 URL（Google Authenticator 等应用可以识别）
+      // 格式: otpauth://totp/{标签}?secret={密钥}&issuer={服务名}
+      const label = encodeURIComponent('YourService:用户');
+      const issuer = encodeURIComponent('YourService');
+      const otpauthUrl = `otpauth://totp/${label}?secret=${secret}&issuer=${issuer}`;
+      
+      // 清空之前的二维码（如果有）
+      document.getElementById('qrcode').innerHTML = '';
+      // 使用 QRCode.js 生成二维码
+      new QRCode(document.getElementById('qrcode'), {
+        text: otpauthUrl,
+        width: 200,
+        height: 200
+      });
+    });
+  </script>
 </body>
 </html>
