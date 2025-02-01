@@ -2,21 +2,18 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>TOTP + 背景音乐 + 背景图 (GitHub Pages)</title>
+  <title>两步验证 + 自动复制</title>
   <style>
-    /* 让 body 使用本地仓库的背景图片 */
     body {
       font-family: Arial, sans-serif;
-      /* 注意这里的相对路径: "./assets/bg.jpg" */
-      background: url("./assets/bg.jpg") no-repeat center center fixed;
-      background-size: cover;
+      background: #f6f8fa;
       margin: 0;
       padding: 0;
     }
     .container {
       max-width: 450px;
       margin: 40px auto;
-      background: rgba(255, 255, 255, 0.9);
+      background: #fff;
       box-shadow: 0 0 8px rgba(0,0,0,0.1);
       border-radius: 8px;
       padding: 20px;
@@ -94,12 +91,8 @@
   </style>
 </head>
 <body>
-
-  <!-- 加载本地仓库的音乐文件，用相对路径 "./assets/music.mp3" -->
-  <audio id="bgMusic" src="./assets/music.mp3" preload="auto"></audio>
-
   <div class="container">
-    <h1>纯JS TOTP + 自动复制 + 背景音乐</h1>
+    <h1>两步验证 + 自动复制</h1>
 
     <input type="text" id="secret" placeholder="在此输入Base32密钥 (可含空格)" />
     <br />
@@ -120,17 +113,18 @@
   </footer>
 
   <script>
-    /* 下面是纯JS TOTP 逻辑 + 自动复制 + 播放音乐 */
     let intervalId = null;
     let currentTimeStep = -1;
     let lastOTP = "";
     const period = 30;
 
+    // === Base32 Decode ===
     function base32Decode(b32) {
       const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
       let bits = 0;
       let value = 0;
       const output = [];
+
       for (let i = 0; i < b32.length; i++) {
         const c = b32[i];
         const index = alphabet.indexOf(c);
@@ -147,6 +141,7 @@
       return new Uint8Array(output);
     }
 
+    // === 纯JS的 SHA-1 实现 (简化版) ===
     function rotateLeft(n, s) {
       return (n << s) | (n >>> (32 - s));
     }
@@ -169,6 +164,7 @@
             (msgBytes[i + 3])
         );
       }
+      let tail = (msgLength % 4) << 3;
       switch (msgLength % 4) {
         case 0:
           wordArray.push(0x080000000);
@@ -198,11 +194,11 @@
       wordArray.push(msgLength >>> 29);
       wordArray.push((msgLength << 3) & 0x0ffffffff);
 
-      let H0 = 0x67452301,
-          H1 = 0xefcdab89,
-          H2 = 0x98badcfe,
-          H3 = 0x10325476,
-          H4 = 0xc3d2e1f0;
+      let H0 = 0x67452301;
+      let H1 = 0xefcdab89;
+      let H2 = 0x98badcfe;
+      let H3 = 0x10325476;
+      let H4 = 0xc3d2e1f0;
 
       for (let i = 0; i < wordArray.length; i += 16) {
         const W = new Array(80);
@@ -212,6 +208,7 @@
         for (let j = 16; j < 80; j++) {
           W[j] = rotateLeft(W[j - 3] ^ W[j - 8] ^ W[j - 14] ^ W[j - 16], 1);
         }
+
         let A = H0, B = H1, C = H2, D = H3, E = H4;
         for (let j = 0; j < 80; j++) {
           let temp;
@@ -225,7 +222,11 @@
             temp = (B ^ C ^ D) + 0xca62c1d6;
           }
           temp = (rotateLeft(A, 5) + temp + E + W[j]) & 0x0ffffffff;
-          E = D; D = C; C = rotateLeft(B, 30); B = A; A = temp;
+          E = D;
+          D = C;
+          C = rotateLeft(B, 30);
+          B = A;
+          A = temp;
         }
         H0 = (H0 + A) & 0x0ffffffff;
         H1 = (H1 + B) & 0x0ffffffff;
@@ -241,6 +242,7 @@
       return digestBytes;
     }
 
+    // === 纯JS HMAC-SHA1 ===
     function hmacSha1(keyBytes, msgBytes) {
       const blockSize = 64;
       let key = keyBytes;
@@ -266,13 +268,15 @@
       return sha1(oPadIH);
     }
 
+    // === 生成 TOTP (纯JS) ===
     function generateTOTP(secretB32) {
       const sanitized = secretB32.replace(/\s+/g, "").toUpperCase();
       const keyBytes = base32Decode(sanitized);
 
       const nowSec = Math.floor(Date.now() / 1000);
-      const timeStep = Math.floor(nowSec / 30);
+      const timeStep = Math.floor(nowSec / period);
 
+      // 8字节 big-endian
       const msg = new Uint8Array(8);
       let tmp = timeStep;
       for (let i = 7; i >= 0; i--) {
@@ -281,6 +285,7 @@
       }
 
       const hmacRes = hmacSha1(keyBytes, msg);
+
       const offset = hmacRes[hmacRes.length - 1] & 0x0f;
       const binary =
         ((hmacRes[offset] & 0x7f) << 24) |
@@ -292,6 +297,8 @@
       return { otp, timeStep };
     }
 
+    // === 自动复制函数 ===
+    // 先尝试 navigator.clipboard，如果环境不安全或不支持，就用 document.execCommand('copy') 方案
     function copyToClipboard(text) {
       if (navigator.clipboard && window.isSecureContext) {
         return navigator.clipboard.writeText(text);
@@ -306,10 +313,7 @@
       }
     }
 
-    let intervalId = null;
-    let currentTimeStep = -1;
-    let lastOTP = "";
-
+    // === 每秒更新界面 ===
     function updateUI() {
       const secretEl = document.getElementById("secret");
       const codeEl = document.getElementById("code");
@@ -329,23 +333,27 @@
       }
 
       const nowSec = Math.floor(Date.now() / 1000);
-      const step = Math.floor(nowSec / 30);
-      const secInCycle = nowSec % 30;
-      const timeLeft = 30 - secInCycle;
+      const step = Math.floor(nowSec / period);
+      const secInCycle = nowSec % period;
+      const timeLeft = period - secInCycle;
 
-      progressBarEl.style.transform = `scaleX(${timeLeft / 30})`;
+      // 进度条从1 -> 0
+      progressBarEl.style.transform = `scaleX(${timeLeft / period})`;
       timerTextEl.textContent = `剩余 ${timeLeft} 秒刷新`;
 
+      // 如果检测到进入新的周期，就重新生成
       if (step !== currentTimeStep) {
         try {
           const { otp, timeStep } = generateTOTP(secretRaw);
           codeEl.textContent = otp;
           errorEl.textContent = "";
           currentTimeStep = timeStep;
+          // 如果和上次生成的OTP不同，复制到剪贴板
           if (otp !== lastOTP) {
             lastOTP = otp;
             copyToClipboard(otp).then(() => {
               copyMsgEl.textContent = `已复制验证码: ${otp}`;
+              // 过2秒后自动清除提示
               setTimeout(() => {
                 copyMsgEl.textContent = "";
               }, 2000);
@@ -362,17 +370,11 @@
     }
 
     function start() {
-      // 点击按钮后再播放音乐，避免被自动阻止
-      const bgMusic = document.getElementById("bgMusic");
-      bgMusic.play().catch((e) => {
-        console.warn("音乐自动播放被阻止：", e);
-      });
-
       if (intervalId) clearInterval(intervalId);
       currentTimeStep = -1;
       lastOTP = "";
       updateUI();
-      intervalId = setInterval(updateUI, 1000);
+      intervalId = setInterval(updateUI, 1000); // 每秒更新UI
     }
   </script>
 </body>
