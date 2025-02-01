@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>TOTP 整合版 (背景+音乐+30秒刷新+自动复制)</title>
+  <title>TOTP 整合版 (静音自动播放 + 点击后开声)</title>
   <style>
     /* 背景图片 */
     body {
@@ -94,11 +94,11 @@
 </head>
 <body>
 
-  <!-- 背景音乐：在点击「开始」后尝试播放 -->
-  <audio id="bgMusic" src="./assets/music.mp3" preload="auto"></audio>
+  <!-- 注意这里：muted + autoplay + loop -->
+  <audio id="bgMusic" src="./assets/music.mp3" preload="auto" autoplay muted loop></audio>
 
   <div class="container">
-    <h1>TOTP 整合版</h1>
+    <h1>TOTP 整合版 (静音自动播放)</h1>
 
     <input type="text" id="secret" placeholder="在此输入Base32密钥 (可含空格)" />
     <br />
@@ -120,17 +120,17 @@
 
   <script>
     /* 
-      本示例整合：
+      该脚本包含：
       1) 纯JS HMAC-SHA1 (避免 Web Crypto 依赖)
       2) 每秒倒计时 & 30秒换一次 TOTP
       3) 自动复制 TOTP
-      4) 背景音乐
+      4) 背景音乐: 静音自动播放 + 点击按钮后取消静音
     */
 
-    const period = 30;            // TOTP 间隔 (30秒)
-    let intervalId = null;        // 用于控制 setInterval
-    let currentTimeStep = -1;     // 记录当前 30秒区间
-    let lastOTP = "";            // 用于对比是否生成了新 OTP
+    const period = 30;
+    let intervalId = null;
+    let currentTimeStep = -1;
+    let lastOTP = "";
 
     // ====== Base32 Decode ======
     function base32Decode(b32) {
@@ -155,7 +155,7 @@
       return new Uint8Array(output);
     }
 
-    // ====== 纯JS SHA-1 函数 ======
+    // ====== 纯JS SHA-1 ======
     function rotateLeft(n, s) {
       return (n << s) | (n >>> (32 - s));
     }
@@ -173,9 +173,9 @@
       for (let i = 0; i < msgLength - 3; i += 4) {
         wordArray.push(
           (msgBytes[i] << 24) |
-            (msgBytes[i + 1] << 16) |
-            (msgBytes[i + 2] << 8) |
-            (msgBytes[i + 3])
+          (msgBytes[i + 1] << 16) |
+          (msgBytes[i + 2] << 8) |
+          (msgBytes[i + 3])
         );
       }
       switch (msgLength % 4) {
@@ -188,20 +188,20 @@
         case 2:
           wordArray.push(
             (msgBytes[msgLength - 2] << 24) |
-              (msgBytes[msgLength - 1] << 16) |
-              0x08000
+            (msgBytes[msgLength - 1] << 16) |
+            0x08000
           );
           break;
         case 3:
           wordArray.push(
             (msgBytes[msgLength - 3] << 24) |
-              (msgBytes[msgLength - 2] << 16) |
-              (msgBytes[msgLength - 1] << 8) |
-              0x80
+            (msgBytes[msgLength - 2] << 16) |
+            (msgBytes[msgLength - 1] << 8) |
+            0x80
           );
           break;
       }
-      while ((wordArray.length % 16) != 14) {
+      while ((wordArray.length % 16) !== 14) {
         wordArray.push(0);
       }
       wordArray.push(msgLength >>> 29);
@@ -235,11 +235,7 @@
             temp = (B ^ C ^ D) + 0xca62c1d6;
           }
           temp = (rotateLeft(A, 5) + temp + E + W[j]) & 0x0ffffffff;
-          E = D;
-          D = C;
-          C = rotateLeft(B, 30);
-          B = A;
-          A = temp;
+          E = D; D = C; C = rotateLeft(B, 30); B = A; A = temp;
         }
         H0 = (H0 + A) & 0x0ffffffff;
         H1 = (H1 + B) & 0x0ffffffff;
@@ -255,7 +251,7 @@
       return digestBytes;
     }
 
-    // ====== 纯JS HMAC-SHA1 ======
+    // ====== HMAC-SHA1 ======
     function hmacSha1(keyBytes, msgBytes) {
       const blockSize = 64;
       let key = keyBytes;
@@ -281,17 +277,14 @@
       return sha1(oPadIH);
     }
 
-    // ====== 生成 6位 TOTP ======
+    // ====== 生成 TOTP (6位) ======
     function generateTOTP(secretB32) {
-      // 1) 去空格并转大写
       const sanitized = secretB32.replace(/\s+/g, "").toUpperCase();
       const keyBytes = base32Decode(sanitized);
 
-      // 2) 计算当前30秒时间步
       const nowSec = Math.floor(Date.now() / 1000);
       const timeStep = Math.floor(nowSec / period);
 
-      // 3) 将 timeStep 转成8字节 big-endian
       const msg = new Uint8Array(8);
       let tmp = timeStep;
       for (let i = 7; i >= 0; i--) {
@@ -299,10 +292,7 @@
         tmp = tmp >> 8;
       }
 
-      // 4) HMAC-SHA1
       const hmacRes = hmacSha1(keyBytes, msg);
-
-      // 5) 动态截取
       const offset = hmacRes[hmacRes.length - 1] & 0x0f;
       const binary =
         ((hmacRes[offset] & 0x7f) << 24) |
@@ -310,12 +300,11 @@
         ((hmacRes[offset + 2] & 0xff) << 8) |
         (hmacRes[offset + 3] & 0xff);
 
-      // 6) 取模 => 6 位
       const otp = (binary % 1000000).toString().padStart(6, "0");
       return { otp, timeStep };
     }
 
-    // ====== 自动复制到剪贴板 ======
+    // ====== 自动复制 ======
     function copyToClipboard(text) {
       if (navigator.clipboard && window.isSecureContext) {
         return navigator.clipboard.writeText(text);
@@ -330,7 +319,7 @@
       }
     }
 
-    // ====== 每秒刷新界面 ======
+    // ====== 主要循环, 每秒更新 ======
     function updateUI() {
       const secretEl = document.getElementById("secret");
       const codeEl = document.getElementById("code");
@@ -349,17 +338,15 @@
         return;
       }
 
-      // 计算当前秒数
       const nowSec = Math.floor(Date.now() / 1000);
       const step = Math.floor(nowSec / period);
       const secInCycle = nowSec % period;
       const timeLeft = period - secInCycle;
 
-      // 更新进度条(从1 -> 0)
       progressBarEl.style.transform = `scaleX(${timeLeft / period})`;
       timerTextEl.textContent = `剩余 ${timeLeft} 秒刷新`;
 
-      // 如果进入新的 30秒周期，则生成新的 TOTP
+      // 若进入新30s周期 => 生成新 TOTP
       if (step !== currentTimeStep) {
         try {
           const { otp, timeStep } = generateTOTP(secretRaw);
@@ -367,12 +354,10 @@
           errorEl.textContent = "";
           currentTimeStep = timeStep;
 
-          // 如果这是新的 OTP，就复制到剪贴板
           if (otp !== lastOTP) {
             lastOTP = otp;
             copyToClipboard(otp).then(() => {
               copyMsgEl.textContent = `已复制验证码: ${otp}`;
-              // 2秒后清掉提示
               setTimeout(() => {
                 copyMsgEl.textContent = "";
               }, 2000);
@@ -388,24 +373,20 @@
       }
     }
 
-    // ====== 用户点击后，开启循环 + 播放音乐 ======
+    // ====== 用户点击「开始」 => 取消静音 + 开启循环 ======
     function start() {
-      // 尝试播放音乐（只在点击后更可能被允许）
       const bgMusic = document.getElementById("bgMusic");
+      // 取消静音, 并调用 play()
+      bgMusic.muted = false;
       bgMusic.play().catch((err) => {
-        console.warn("音乐自动播放被阻止或出错:", err);
+        console.warn("尝试取消静音播放时出错:", err);
       });
 
-      // 若之前已开始过，先停止
       if (intervalId) clearInterval(intervalId);
-
-      // 重置
       currentTimeStep = -1;
       lastOTP = "";
 
-      // 立即更新一次
       updateUI();
-      // 每秒更新UI
       intervalId = setInterval(updateUI, 1000);
     }
   </script>
