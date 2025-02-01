@@ -2,15 +2,14 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>TOTP + 背景图 + 音乐 (Debug版)</title>
+  <title>TOTP + 背景图 + 音乐</title>
   <style>
-    /* 确认图片路径: 若你的仓库是 2FA/ 下, 并且 bg.jpg 放在 assets/ 里, 可用下行 */
-    /* 如果路径错, 背景会不显示, 但你说背景正常, 那就 OK. */
+    /* 根据你仓库的结构，确保 background URL 的路径正确 */
     body {
       font-family: Arial, sans-serif;
       background: url("./assets/bg.jpg") no-repeat center center fixed;
       background-size: cover;
-      margin: 0; 
+      margin: 0;
       padding: 0;
     }
     .container {
@@ -22,16 +21,45 @@
       padding: 20px;
       text-align: center;
     }
+    h1 {
+      margin-top: 0;
+      color: #333;
+    }
+    input {
+      width: 70%;
+      padding: 10px;
+      font-size: 1rem;
+      margin-bottom: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 1rem;
+      background: #007bff;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-bottom: 10px;
+    }
+    button:hover {
+      background: #0056b3;
+    }
     #code {
       font-size: 2rem;
       font-weight: bold;
       margin-top: 20px;
       color: #333;
     }
+    #error {
+      color: red;
+      min-height: 1.5em;
+    }
   </style>
 </head>
 <body>
-  <!-- 音乐文件: 同理, 确保 ./assets/music.mp3 存在且能访问. -->
+  <!-- 播放音乐文件 (确保 ./assets/music.mp3 存在) -->
   <audio id="bgMusic" src="./assets/music.mp3" preload="auto"></audio>
 
   <div class="container">
@@ -39,42 +67,227 @@
     <input type="text" id="secret" placeholder="Base32 密钥" />
     <br><br>
     <button onclick="start()">开始生成 TOTP</button>
+
     <div id="code">尚未生成</div>
-    <div id="error" style="color:red"></div>
+    <div id="error"></div>
   </div>
 
   <script>
-    console.log("脚本已加载: 如果有语法错误, 这行可能不会出现.");
+    console.log("脚本已加载: 如果有语法错误, 这行不会出现.");
 
-    function start() {
-      console.log("start() 函数被点击调用");
-      const bgMusic = document.getElementById("bgMusic");
-      bgMusic.play().then(()=>{
-        console.log("音乐播放已尝试, 如果被阻止, 浏览器可能会报错");
-      }).catch(err=>{
-        console.warn("音乐自动播放失败:", err);
-      });
-      
-      generateTOTP();
+    // ====== 纯JS TOTP 相关的函数 ======
+    // 1) Base32 解码
+    function base32Decode(b32) {
+      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+      let bits = 0;
+      let value = 0;
+      const output = [];
+      for (let i = 0; i < b32.length; i++) {
+        const c = b32[i];
+        const index = alphabet.indexOf(c);
+        if (index < 0) {
+          throw new Error("Base32中含非法字符: " + c);
+        }
+        value = (value << 5) | index;
+        bits += 5;
+        if (bits >= 8) {
+          bits -= 8;
+          output.push((value >>> bits) & 0xff);
+        }
+      }
+      return new Uint8Array(output);
     }
 
-    function generateTOTP() {
-      console.log("开始生成 TOTP");
+    // 2) 简易版 SHA-1
+    function rotateLeft(n, s) {
+      return (n << s) | (n >>> (32 - s));
+    }
+    function toHex(val) {
+      let s = "";
+      for (let i = 7; i >= 0; i--) {
+        const v = (val >>> (i * 4)) & 0x0f;
+        s += v.toString(16);
+      }
+      return s;
+    }
+    function sha1(msgBytes) {
+      const msgLength = msgBytes.length;
+      const wordArray = [];
+      for (let i = 0; i < msgLength - 3; i += 4) {
+        wordArray.push(
+          (msgBytes[i] << 24) |
+            (msgBytes[i + 1] << 16) |
+            (msgBytes[i + 2] << 8) |
+            (msgBytes[i + 3])
+        );
+      }
+      switch (msgLength % 4) {
+        case 0:
+          wordArray.push(0x080000000);
+          break;
+        case 1:
+          wordArray.push((msgBytes[msgLength - 1] << 24) | 0x0800000);
+          break;
+        case 2:
+          wordArray.push(
+            (msgBytes[msgLength - 2] << 24) |
+              (msgBytes[msgLength - 1] << 16) |
+              0x08000
+          );
+          break;
+        case 3:
+          wordArray.push(
+            (msgBytes[msgLength - 3] << 24) |
+              (msgBytes[msgLength - 2] << 16) |
+              (msgBytes[msgLength - 1] << 8) |
+              0x80
+          );
+          break;
+      }
+      while ((wordArray.length % 16) != 14) {
+        wordArray.push(0);
+      }
+      wordArray.push(msgLength >>> 29);
+      wordArray.push((msgLength << 3) & 0x0ffffffff);
+
+      let H0 = 0x67452301;
+      let H1 = 0xefcdab89;
+      let H2 = 0x98badcfe;
+      let H3 = 0x10325476;
+      let H4 = 0xc3d2e1f0;
+
+      for (let i = 0; i < wordArray.length; i += 16) {
+        const W = new Array(80);
+        for (let j = 0; j < 16; j++) {
+          W[j] = wordArray[i + j];
+        }
+        for (let j = 16; j < 80; j++) {
+          W[j] = rotateLeft(W[j - 3] ^ W[j - 8] ^ W[j - 14] ^ W[j - 16], 1);
+        }
+
+        let A = H0, B = H1, C = H2, D = H3, E = H4;
+        for (let j = 0; j < 80; j++) {
+          let temp;
+          if (j < 20) {
+            temp = ((B & C) | (~B & D)) + 0x5a827999;
+          } else if (j < 40) {
+            temp = (B ^ C ^ D) + 0x6ed9eba1;
+          } else if (j < 60) {
+            temp = ((B & C) | (B & D) | (C & D)) + 0x8f1bbcdc;
+          } else {
+            temp = (B ^ C ^ D) + 0xca62c1d6;
+          }
+          temp = (rotateLeft(A, 5) + temp + E + W[j]) & 0x0ffffffff;
+          E = D; D = C; C = rotateLeft(B, 30); B = A; A = temp;
+        }
+        H0 = (H0 + A) & 0x0ffffffff;
+        H1 = (H1 + B) & 0x0ffffffff;
+        H2 = (H2 + C) & 0x0ffffffff;
+        H3 = (H3 + D) & 0x0ffffffff;
+        H4 = (H4 + E) & 0x0ffffffff;
+      }
+      const digestHex = toHex(H0) + toHex(H1) + toHex(H2) + toHex(H3) + toHex(H4);
+      const digestBytes = new Uint8Array(20);
+      for (let i = 0; i < 20; i++) {
+        digestBytes[i] = parseInt(digestHex.substr(i * 2, 2), 16);
+      }
+      return digestBytes;
+    }
+
+    // 3) HMAC-SHA1
+    function hmacSha1(keyBytes, msgBytes) {
+      const blockSize = 64;
+      let key = keyBytes;
+      if (key.length > blockSize) {
+        key = sha1(key);
+      }
+      const oKeyPad = new Uint8Array(blockSize);
+      const iKeyPad = new Uint8Array(blockSize);
+
+      for (let i = 0; i < blockSize; i++) {
+        const b = i < key.length ? key[i] : 0;
+        oKeyPad[i] = b ^ 0x5c;
+        iKeyPad[i] = b ^ 0x36;
+      }
+      const iPadMsg = new Uint8Array(iKeyPad.length + msgBytes.length);
+      iPadMsg.set(iKeyPad);
+      iPadMsg.set(msgBytes, iKeyPad.length);
+      const iHash = sha1(iPadMsg);
+
+      const oPadIH = new Uint8Array(oKeyPad.length + iHash.length);
+      oPadIH.set(oKeyPad);
+      oPadIH.set(iHash, oKeyPad.length);
+      return sha1(oPadIH);
+    }
+
+    // 4) 生成 6位 TOTP
+    function generateTOTP(secretB32) {
+      // 去空格并转大写
+      const sanitized = secretB32.replace(/\s+/g, "").toUpperCase();
+      const keyBytes = base32Decode(sanitized);
+
+      // 计算当前时间步(30秒)
+      const nowSec = Math.floor(Date.now() / 1000);
+      const timeStep = Math.floor(nowSec / 30);
+
+      // 把 timeStep 变成 8 字节 (big-endian)
+      const msg = new Uint8Array(8);
+      let tmp = timeStep;
+      for (let i = 7; i >= 0; i--) {
+        msg[i] = tmp & 0xff;
+        tmp = tmp >> 8;
+      }
+
+      // 计算 HMAC-SHA1
+      const hmacRes = hmacSha1(keyBytes, msg);
+
+      // 动态截取 (RFC4226)
+      const offset = hmacRes[hmacRes.length - 1] & 0x0f;
+      const binary = ((hmacRes[offset] & 0x7f) << 24) |
+                     ((hmacRes[offset + 1] & 0xff) << 16) |
+                     ((hmacRes[offset + 2] & 0xff) << 8)  |
+                     (hmacRes[offset + 3] & 0xff);
+
+      // 取模1000000 => 6位
+      const otp = (binary % 1000000).toString().padStart(6, "0");
+      return otp;
+    }
+
+    // ====== 点击按钮的事件 ======
+    function start() {
+      console.log("start() 被调用: 播放音乐 + 生成 TOTP");
+      const bgMusic = document.getElementById("bgMusic");
+      bgMusic.play().then(() => {
+        console.log("音乐播放尝试成功");
+      }).catch(err => {
+        console.warn("音乐播放被阻止或出错:", err);
+      });
+      
+      // 真正生成 TOTP
+      displayTOTP();
+    }
+
+    function displayTOTP() {
       const secret = document.getElementById("secret").value.trim();
       const codeEl = document.getElementById("code");
       const errorEl = document.getElementById("error");
 
-      if(!secret) {
+      if (!secret) {
         errorEl.textContent = "请先输入密钥";
         codeEl.textContent = "尚未生成";
         return;
       }
       errorEl.textContent = "";
 
-      // 这里先简单做一个最小可行测试: 不使用 HMAC, 只打印 secret
-      // 如果想真正测试 TOTP, 你可贴回之前完整的纯JS TOTP实现.
-      // 先看这部分是否会执行, 以及是否报错.
-      codeEl.textContent = "你输入的密钥是: " + secret;
+      try {
+        const token = generateTOTP(secret);
+        codeEl.textContent = token;
+        console.log("已生成 TOTP:", token);
+      } catch(e) {
+        errorEl.textContent = "生成TOTP出错: " + e.message;
+        codeEl.textContent = "尚未生成";
+        console.error("TOTP 出错:", e);
+      }
     }
   </script>
 </body>
