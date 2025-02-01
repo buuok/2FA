@@ -2,9 +2,9 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>TOTP + 背景图 + 音乐</title>
+  <title>TOTP 整合版 (背景+音乐+30秒刷新+自动复制)</title>
   <style>
-    /* 根据你仓库的结构，确保 background URL 的路径正确 */
+    /* 背景图片 */
     body {
       font-family: Arial, sans-serif;
       background: url("./assets/bg.jpg") no-repeat center center fixed;
@@ -47,46 +47,103 @@
       background: #0056b3;
     }
     #code {
-      font-size: 2rem;
+      font-size: 2.2rem;
       font-weight: bold;
       margin-top: 20px;
+      margin-bottom: 10px;
       color: #333;
     }
     #error {
       color: red;
       min-height: 1.5em;
     }
+    .progress-wrapper {
+      position: relative;
+      height: 10px;
+      width: 100%;
+      background: #e9ecef;
+      border-radius: 5px;
+      overflow: hidden;
+      margin-top: 20px;
+    }
+    .progress-bar {
+      height: 10px;
+      width: 100%;
+      background: linear-gradient(to right, #007bff, #00d4ff);
+      transform-origin: left center;
+      transition: transform 0.2s ease-out;
+    }
+    .timer-text {
+      margin-top: 5px;
+      color: #666;
+      font-size: 0.9rem;
+    }
+    #copy-msg {
+      color: green;
+      min-height: 1.5em;
+      margin-top: 5px;
+      font-size: 0.9rem;
+    }
+    footer {
+      text-align: center;
+      margin-top: 20px;
+      color: #aaa;
+      font-size: 0.8rem;
+    }
   </style>
 </head>
 <body>
-  <!-- 播放音乐文件 (确保 ./assets/music.mp3 存在) -->
+
+  <!-- 背景音乐：在点击「开始」后尝试播放 -->
   <audio id="bgMusic" src="./assets/music.mp3" preload="auto"></audio>
 
   <div class="container">
-    <h1>TOTP + Debug</h1>
-    <input type="text" id="secret" placeholder="Base32 密钥" />
-    <br><br>
+    <h1>TOTP 整合版</h1>
+
+    <input type="text" id="secret" placeholder="在此输入Base32密钥 (可含空格)" />
+    <br />
     <button onclick="start()">开始生成 TOTP</button>
 
     <div id="code">尚未生成</div>
     <div id="error"></div>
+    <div id="copy-msg"></div>
+
+    <div class="progress-wrapper">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+    <div class="timer-text" id="timer-text">剩余 30 秒刷新</div>
   </div>
 
-  <script>
-    console.log("脚本已加载: 如果有语法错误, 这行不会出现.");
+  <footer>
+    &copy; 2025 My 2FA Tool
+  </footer>
 
-    // ====== 纯JS TOTP 相关的函数 ======
-    // 1) Base32 解码
+  <script>
+    /* 
+      本示例整合：
+      1) 纯JS HMAC-SHA1 (避免 Web Crypto 依赖)
+      2) 每秒倒计时 & 30秒换一次 TOTP
+      3) 自动复制 TOTP
+      4) 背景音乐
+    */
+
+    const period = 30;            // TOTP 间隔 (30秒)
+    let intervalId = null;        // 用于控制 setInterval
+    let currentTimeStep = -1;     // 记录当前 30秒区间
+    let lastOTP = "";            // 用于对比是否生成了新 OTP
+
+    // ====== Base32 Decode ======
     function base32Decode(b32) {
       const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
       let bits = 0;
       let value = 0;
       const output = [];
+
       for (let i = 0; i < b32.length; i++) {
         const c = b32[i];
         const index = alphabet.indexOf(c);
         if (index < 0) {
-          throw new Error("Base32中含非法字符: " + c);
+          throw new Error("Base32 含非法字符: " + c);
         }
         value = (value << 5) | index;
         bits += 5;
@@ -98,7 +155,7 @@
       return new Uint8Array(output);
     }
 
-    // 2) 简易版 SHA-1
+    // ====== 纯JS SHA-1 函数 ======
     function rotateLeft(n, s) {
       return (n << s) | (n >>> (32 - s));
     }
@@ -178,7 +235,11 @@
             temp = (B ^ C ^ D) + 0xca62c1d6;
           }
           temp = (rotateLeft(A, 5) + temp + E + W[j]) & 0x0ffffffff;
-          E = D; D = C; C = rotateLeft(B, 30); B = A; A = temp;
+          E = D;
+          D = C;
+          C = rotateLeft(B, 30);
+          B = A;
+          A = temp;
         }
         H0 = (H0 + A) & 0x0ffffffff;
         H1 = (H1 + B) & 0x0ffffffff;
@@ -194,7 +255,7 @@
       return digestBytes;
     }
 
-    // 3) HMAC-SHA1
+    // ====== 纯JS HMAC-SHA1 ======
     function hmacSha1(keyBytes, msgBytes) {
       const blockSize = 64;
       let key = keyBytes;
@@ -220,17 +281,17 @@
       return sha1(oPadIH);
     }
 
-    // 4) 生成 6位 TOTP
+    // ====== 生成 6位 TOTP ======
     function generateTOTP(secretB32) {
-      // 去空格并转大写
+      // 1) 去空格并转大写
       const sanitized = secretB32.replace(/\s+/g, "").toUpperCase();
       const keyBytes = base32Decode(sanitized);
 
-      // 计算当前时间步(30秒)
+      // 2) 计算当前30秒时间步
       const nowSec = Math.floor(Date.now() / 1000);
-      const timeStep = Math.floor(nowSec / 30);
+      const timeStep = Math.floor(nowSec / period);
 
-      // 把 timeStep 变成 8 字节 (big-endian)
+      // 3) 将 timeStep 转成8字节 big-endian
       const msg = new Uint8Array(8);
       let tmp = timeStep;
       for (let i = 7; i >= 0; i--) {
@@ -238,56 +299,114 @@
         tmp = tmp >> 8;
       }
 
-      // 计算 HMAC-SHA1
+      // 4) HMAC-SHA1
       const hmacRes = hmacSha1(keyBytes, msg);
 
-      // 动态截取 (RFC4226)
+      // 5) 动态截取
       const offset = hmacRes[hmacRes.length - 1] & 0x0f;
-      const binary = ((hmacRes[offset] & 0x7f) << 24) |
-                     ((hmacRes[offset + 1] & 0xff) << 16) |
-                     ((hmacRes[offset + 2] & 0xff) << 8)  |
-                     (hmacRes[offset + 3] & 0xff);
+      const binary =
+        ((hmacRes[offset] & 0x7f) << 24) |
+        ((hmacRes[offset + 1] & 0xff) << 16) |
+        ((hmacRes[offset + 2] & 0xff) << 8) |
+        (hmacRes[offset + 3] & 0xff);
 
-      // 取模1000000 => 6位
+      // 6) 取模 => 6 位
       const otp = (binary % 1000000).toString().padStart(6, "0");
-      return otp;
+      return { otp, timeStep };
     }
 
-    // ====== 点击按钮的事件 ======
-    function start() {
-      console.log("start() 被调用: 播放音乐 + 生成 TOTP");
-      const bgMusic = document.getElementById("bgMusic");
-      bgMusic.play().then(() => {
-        console.log("音乐播放尝试成功");
-      }).catch(err => {
-        console.warn("音乐播放被阻止或出错:", err);
-      });
-      
-      // 真正生成 TOTP
-      displayTOTP();
+    // ====== 自动复制到剪贴板 ======
+    function copyToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+        return Promise.resolve();
+      }
     }
 
-    function displayTOTP() {
-      const secret = document.getElementById("secret").value.trim();
+    // ====== 每秒刷新界面 ======
+    function updateUI() {
+      const secretEl = document.getElementById("secret");
       const codeEl = document.getElementById("code");
       const errorEl = document.getElementById("error");
+      const copyMsgEl = document.getElementById("copy-msg");
+      const timerTextEl = document.getElementById("timer-text");
+      const progressBarEl = document.getElementById("progress-bar");
 
-      if (!secret) {
-        errorEl.textContent = "请先输入密钥";
+      const secretRaw = secretEl.value.trim();
+      if (!secretRaw) {
         codeEl.textContent = "尚未生成";
+        errorEl.textContent = "请先输入密钥";
+        copyMsgEl.textContent = "";
+        timerTextEl.textContent = `剩余 ${period} 秒刷新`;
+        progressBarEl.style.transform = "scaleX(1)";
         return;
       }
-      errorEl.textContent = "";
 
-      try {
-        const token = generateTOTP(secret);
-        codeEl.textContent = token;
-        console.log("已生成 TOTP:", token);
-      } catch(e) {
-        errorEl.textContent = "生成TOTP出错: " + e.message;
-        codeEl.textContent = "尚未生成";
-        console.error("TOTP 出错:", e);
+      // 计算当前秒数
+      const nowSec = Math.floor(Date.now() / 1000);
+      const step = Math.floor(nowSec / period);
+      const secInCycle = nowSec % period;
+      const timeLeft = period - secInCycle;
+
+      // 更新进度条(从1 -> 0)
+      progressBarEl.style.transform = `scaleX(${timeLeft / period})`;
+      timerTextEl.textContent = `剩余 ${timeLeft} 秒刷新`;
+
+      // 如果进入新的 30秒周期，则生成新的 TOTP
+      if (step !== currentTimeStep) {
+        try {
+          const { otp, timeStep } = generateTOTP(secretRaw);
+          codeEl.textContent = otp;
+          errorEl.textContent = "";
+          currentTimeStep = timeStep;
+
+          // 如果这是新的 OTP，就复制到剪贴板
+          if (otp !== lastOTP) {
+            lastOTP = otp;
+            copyToClipboard(otp).then(() => {
+              copyMsgEl.textContent = `已复制验证码: ${otp}`;
+              // 2秒后清掉提示
+              setTimeout(() => {
+                copyMsgEl.textContent = "";
+              }, 2000);
+            });
+          }
+        } catch (err) {
+          codeEl.textContent = "尚未生成";
+          errorEl.textContent = "错误: " + err.message;
+          copyMsgEl.textContent = "";
+          currentTimeStep = -1;
+          lastOTP = "";
+        }
       }
+    }
+
+    // ====== 用户点击后，开启循环 + 播放音乐 ======
+    function start() {
+      // 尝试播放音乐（只在点击后更可能被允许）
+      const bgMusic = document.getElementById("bgMusic");
+      bgMusic.play().catch((err) => {
+        console.warn("音乐自动播放被阻止或出错:", err);
+      });
+
+      // 若之前已开始过，先停止
+      if (intervalId) clearInterval(intervalId);
+
+      // 重置
+      currentTimeStep = -1;
+      lastOTP = "";
+
+      // 立即更新一次
+      updateUI();
+      // 每秒更新UI
+      intervalId = setInterval(updateUI, 1000);
     }
   </script>
 </body>
