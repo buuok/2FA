@@ -2,85 +2,378 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>TOTP 2FA 生成器</title>
+  <title>TOTP + 背景音乐 + 背景图 (GitHub Pages)</title>
   <style>
-    body { font-family: Arial, sans-serif; padding: 20px; }
-    input, button { padding: 8px; margin: 5px 0; }
-    #qrcode { margin-top: 15px; }
+    /* 让 body 使用本地仓库的背景图片 */
+    body {
+      font-family: Arial, sans-serif;
+      /* 注意这里的相对路径: "./assets/bg.jpg" */
+      background: url("./assets/bg.jpg") no-repeat center center fixed;
+      background-size: cover;
+      margin: 0;
+      padding: 0;
+    }
+    .container {
+      max-width: 450px;
+      margin: 40px auto;
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 0 8px rgba(0,0,0,0.1);
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+    }
+    h1 {
+      margin-top: 0;
+      color: #333;
+    }
+    input {
+      width: 70%;
+      padding: 10px;
+      font-size: 1rem;
+      margin-bottom: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 1rem;
+      background: #007bff;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-bottom: 10px;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    #code {
+      font-size: 2.2rem;
+      font-weight: bold;
+      margin-top: 20px;
+      margin-bottom: 10px;
+      color: #333;
+    }
+    #error {
+      color: red;
+      min-height: 1.5em;
+    }
+    .progress-wrapper {
+      position: relative;
+      height: 10px;
+      width: 100%;
+      background: #e9ecef;
+      border-radius: 5px;
+      overflow: hidden;
+      margin-top: 20px;
+    }
+    .progress-bar {
+      height: 10px;
+      width: 100%;
+      background: linear-gradient(to right, #007bff, #00d4ff);
+      transform-origin: left center;
+      transition: transform 0.2s ease-out;
+    }
+    .timer-text {
+      margin-top: 5px;
+      color: #666;
+      font-size: 0.9rem;
+    }
+    #copy-msg {
+      color: green;
+      min-height: 1.5em;
+      margin-top: 5px;
+      font-size: 0.9rem;
+    }
+    footer {
+      text-align: center;
+      margin-top: 20px;
+      color: #aaa;
+      font-size: 0.8rem;
+    }
   </style>
 </head>
 <body>
-  <h1>TOTP 双因素认证生成器</h1>
-  <div>
-    <label for="secretInput">输入你的密钥（或点击生成）：</label><br>
-    <input type="text" id="secretInput" placeholder="例如：JBSWY3DPEHPK3PXP" size="30">
-    <button id="generateSecret">生成随机密钥</button>
-  </div>
-  <div>
-    <button id="generateToken">生成 TOTP</button>
-    <p>当前 TOTP: <span id="tokenDisplay">--</span></p>
-  </div>
-  <div>
-    <button id="generateQR">生成绑定二维码</button>
-    <div id="qrcode"></div>
+
+  <!-- 加载本地仓库的音乐文件，用相对路径 "./assets/music.mp3" -->
+  <audio id="bgMusic" src="./assets/music.mp3" preload="auto"></audio>
+
+  <div class="container">
+    <h1>纯JS TOTP + 自动复制 + 背景音乐</h1>
+
+    <input type="text" id="secret" placeholder="在此输入Base32密钥 (可含空格)" />
+    <br />
+    <button onclick="start()">开始生成 TOTP</button>
+
+    <div id="code">尚未生成</div>
+    <div id="error"></div>
+    <div id="copy-msg"></div>
+
+    <div class="progress-wrapper">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+    <div class="timer-text" id="timer-text">剩余 30 秒刷新</div>
   </div>
 
-  <!-- 引入 otplib 库（使用 CDN） -->
-  <script src="https://unpkg.com/otplib@12.0.1/otplib-browser.min.js"></script>
-  <!-- 引入 QRCode.js（使用 CDN） -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <!-- 主逻辑 -->
+  <footer>
+    &copy; 2025 My 2FA Tool
+  </footer>
+
   <script>
-    // 随机生成一个密钥（可以根据需要调整长度）
-    function generateRandomSecret(length = 16) {
-      const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; // Base32 字符集
-      let result = '';
-      for (let i = 0; i < length; i++) {
-        result += charset.charAt(Math.floor(Math.random() * charset.length));
+    /* 下面是纯JS TOTP 逻辑 + 自动复制 + 播放音乐 */
+    let intervalId = null;
+    let currentTimeStep = -1;
+    let lastOTP = "";
+    const period = 30;
+
+    function base32Decode(b32) {
+      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+      let bits = 0;
+      let value = 0;
+      const output = [];
+      for (let i = 0; i < b32.length; i++) {
+        const c = b32[i];
+        const index = alphabet.indexOf(c);
+        if (index < 0) {
+          throw new Error("Base32 含非法字符: " + c);
+        }
+        value = (value << 5) | index;
+        bits += 5;
+        if (bits >= 8) {
+          bits -= 8;
+          output.push((value >>> bits) & 0xff);
+        }
       }
-      return result;
+      return new Uint8Array(output);
     }
 
-    // 当点击生成随机密钥时
-    document.getElementById('generateSecret').addEventListener('click', () => {
-      const secret = generateRandomSecret();
-      document.getElementById('secretInput').value = secret;
-    });
+    function rotateLeft(n, s) {
+      return (n << s) | (n >>> (32 - s));
+    }
+    function toHex(val) {
+      let s = "";
+      for (let i = 7; i >= 0; i--) {
+        const v = (val >>> (i * 4)) & 0x0f;
+        s += v.toString(16);
+      }
+      return s;
+    }
+    function sha1(msgBytes) {
+      const msgLength = msgBytes.length;
+      const wordArray = [];
+      for (let i = 0; i < msgLength - 3; i += 4) {
+        wordArray.push(
+          (msgBytes[i] << 24) |
+            (msgBytes[i + 1] << 16) |
+            (msgBytes[i + 2] << 8) |
+            (msgBytes[i + 3])
+        );
+      }
+      switch (msgLength % 4) {
+        case 0:
+          wordArray.push(0x080000000);
+          break;
+        case 1:
+          wordArray.push((msgBytes[msgLength - 1] << 24) | 0x0800000);
+          break;
+        case 2:
+          wordArray.push(
+            (msgBytes[msgLength - 2] << 24) |
+              (msgBytes[msgLength - 1] << 16) |
+              0x08000
+          );
+          break;
+        case 3:
+          wordArray.push(
+            (msgBytes[msgLength - 3] << 24) |
+              (msgBytes[msgLength - 2] << 16) |
+              (msgBytes[msgLength - 1] << 8) |
+              0x80
+          );
+          break;
+      }
+      while ((wordArray.length % 16) != 14) {
+        wordArray.push(0);
+      }
+      wordArray.push(msgLength >>> 29);
+      wordArray.push((msgLength << 3) & 0x0ffffffff);
 
-    // 当点击生成 TOTP 时
-    document.getElementById('generateToken').addEventListener('click', () => {
-      const secret = document.getElementById('secretInput').value.trim();
-      if (!secret) {
-        alert('请先输入或生成密钥');
+      let H0 = 0x67452301,
+          H1 = 0xefcdab89,
+          H2 = 0x98badcfe,
+          H3 = 0x10325476,
+          H4 = 0xc3d2e1f0;
+
+      for (let i = 0; i < wordArray.length; i += 16) {
+        const W = new Array(80);
+        for (let j = 0; j < 16; j++) {
+          W[j] = wordArray[i + j];
+        }
+        for (let j = 16; j < 80; j++) {
+          W[j] = rotateLeft(W[j - 3] ^ W[j - 8] ^ W[j - 14] ^ W[j - 16], 1);
+        }
+        let A = H0, B = H1, C = H2, D = H3, E = H4;
+        for (let j = 0; j < 80; j++) {
+          let temp;
+          if (j < 20) {
+            temp = ((B & C) | (~B & D)) + 0x5a827999;
+          } else if (j < 40) {
+            temp = (B ^ C ^ D) + 0x6ed9eba1;
+          } else if (j < 60) {
+            temp = ((B & C) | (B & D) | (C & D)) + 0x8f1bbcdc;
+          } else {
+            temp = (B ^ C ^ D) + 0xca62c1d6;
+          }
+          temp = (rotateLeft(A, 5) + temp + E + W[j]) & 0x0ffffffff;
+          E = D; D = C; C = rotateLeft(B, 30); B = A; A = temp;
+        }
+        H0 = (H0 + A) & 0x0ffffffff;
+        H1 = (H1 + B) & 0x0ffffffff;
+        H2 = (H2 + C) & 0x0ffffffff;
+        H3 = (H3 + D) & 0x0ffffffff;
+        H4 = (H4 + E) & 0x0ffffffff;
+      }
+      const digestHex = toHex(H0) + toHex(H1) + toHex(H2) + toHex(H3) + toHex(H4);
+      const digestBytes = new Uint8Array(20);
+      for (let i = 0; i < 20; i++) {
+        digestBytes[i] = parseInt(digestHex.substr(i * 2, 2), 16);
+      }
+      return digestBytes;
+    }
+
+    function hmacSha1(keyBytes, msgBytes) {
+      const blockSize = 64;
+      let key = keyBytes;
+      if (key.length > blockSize) {
+        key = sha1(key);
+      }
+      const oKeyPad = new Uint8Array(blockSize);
+      const iKeyPad = new Uint8Array(blockSize);
+
+      for (let i = 0; i < blockSize; i++) {
+        const b = i < key.length ? key[i] : 0;
+        oKeyPad[i] = b ^ 0x5c;
+        iKeyPad[i] = b ^ 0x36;
+      }
+      const iPadMsg = new Uint8Array(iKeyPad.length + msgBytes.length);
+      iPadMsg.set(iKeyPad);
+      iPadMsg.set(msgBytes, iKeyPad.length);
+      const iHash = sha1(iPadMsg);
+
+      const oPadIH = new Uint8Array(oKeyPad.length + iHash.length);
+      oPadIH.set(oKeyPad);
+      oPadIH.set(iHash, oKeyPad.length);
+      return sha1(oPadIH);
+    }
+
+    function generateTOTP(secretB32) {
+      const sanitized = secretB32.replace(/\s+/g, "").toUpperCase();
+      const keyBytes = base32Decode(sanitized);
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      const timeStep = Math.floor(nowSec / 30);
+
+      const msg = new Uint8Array(8);
+      let tmp = timeStep;
+      for (let i = 7; i >= 0; i--) {
+        msg[i] = tmp & 0xff;
+        tmp = tmp >> 8;
+      }
+
+      const hmacRes = hmacSha1(keyBytes, msg);
+      const offset = hmacRes[hmacRes.length - 1] & 0x0f;
+      const binary =
+        ((hmacRes[offset] & 0x7f) << 24) |
+        ((hmacRes[offset + 1] & 0xff) << 16) |
+        ((hmacRes[offset + 2] & 0xff) << 8) |
+        (hmacRes[offset + 3] & 0xff);
+
+      const otp = (binary % 1000000).toString().padStart(6, "0");
+      return { otp, timeStep };
+    }
+
+    function copyToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+        return Promise.resolve();
+      }
+    }
+
+    let intervalId = null;
+    let currentTimeStep = -1;
+    let lastOTP = "";
+
+    function updateUI() {
+      const secretEl = document.getElementById("secret");
+      const codeEl = document.getElementById("code");
+      const errorEl = document.getElementById("error");
+      const copyMsgEl = document.getElementById("copy-msg");
+      const timerTextEl = document.getElementById("timer-text");
+      const progressBarEl = document.getElementById("progress-bar");
+
+      const secretRaw = secretEl.value.trim();
+      if (!secretRaw) {
+        codeEl.textContent = "尚未生成";
+        errorEl.textContent = "请先输入密钥";
+        copyMsgEl.textContent = "";
+        timerTextEl.textContent = "剩余 30 秒刷新";
+        progressBarEl.style.transform = "scaleX(1)";
         return;
       }
-      // 使用 otplib 的 authenticator 模块生成 TOTP
-      const token = otplib.authenticator.generate(secret);
-      document.getElementById('tokenDisplay').textContent = token;
-    });
 
-    // 当点击生成二维码时
-    document.getElementById('generateQR').addEventListener('click', () => {
-      const secret = document.getElementById('secretInput').value.trim();
-      if (!secret) {
-        alert('请先输入或生成密钥');
-        return;
+      const nowSec = Math.floor(Date.now() / 1000);
+      const step = Math.floor(nowSec / 30);
+      const secInCycle = nowSec % 30;
+      const timeLeft = 30 - secInCycle;
+
+      progressBarEl.style.transform = `scaleX(${timeLeft / 30})`;
+      timerTextEl.textContent = `剩余 ${timeLeft} 秒刷新`;
+
+      if (step !== currentTimeStep) {
+        try {
+          const { otp, timeStep } = generateTOTP(secretRaw);
+          codeEl.textContent = otp;
+          errorEl.textContent = "";
+          currentTimeStep = timeStep;
+          if (otp !== lastOTP) {
+            lastOTP = otp;
+            copyToClipboard(otp).then(() => {
+              copyMsgEl.textContent = `已复制验证码: ${otp}`;
+              setTimeout(() => {
+                copyMsgEl.textContent = "";
+              }, 2000);
+            });
+          }
+        } catch (err) {
+          codeEl.textContent = "尚未生成";
+          errorEl.textContent = "错误: " + err.message;
+          copyMsgEl.textContent = "";
+          currentTimeStep = -1;
+          lastOTP = "";
+        }
       }
-      // 构造 OTP Auth 协议 URL（Google Authenticator 等应用可以识别）
-      // 格式: otpauth://totp/{标签}?secret={密钥}&issuer={服务名}
-      const label = encodeURIComponent('YourService:用户');
-      const issuer = encodeURIComponent('YourService');
-      const otpauthUrl = `otpauth://totp/${label}?secret=${secret}&issuer=${issuer}`;
-      
-      // 清空之前的二维码（如果有）
-      document.getElementById('qrcode').innerHTML = '';
-      // 使用 QRCode.js 生成二维码
-      new QRCode(document.getElementById('qrcode'), {
-        text: otpauthUrl,
-        width: 200,
-        height: 200
+    }
+
+    function start() {
+      // 点击按钮后再播放音乐，避免被自动阻止
+      const bgMusic = document.getElementById("bgMusic");
+      bgMusic.play().catch((e) => {
+        console.warn("音乐自动播放被阻止：", e);
       });
-    });
+
+      if (intervalId) clearInterval(intervalId);
+      currentTimeStep = -1;
+      lastOTP = "";
+      updateUI();
+      intervalId = setInterval(updateUI, 1000);
+    }
   </script>
 </body>
 </html>
