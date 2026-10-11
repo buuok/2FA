@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>TOTP 整合版 (静音自动播放 + 点击后开声)</title>
+  <title>TOTP 整合版</title>
   <style>
     /* 背景图片 */
     body {
@@ -45,6 +45,14 @@
     }
     button:hover {
       background: #0056b3;
+    }
+    #music-toggle {
+      background: #6c757d;
+      font-size: 0.85rem;
+      padding: 6px 14px;
+    }
+    #music-toggle:hover {
+      background: #545b62;
     }
     #code {
       font-size: 2.2rem;
@@ -94,15 +102,17 @@
 </head>
 <body>
 
-  <!-- 注意这里：muted + autoplay + loop -->
-  <audio id="bgMusic" src="./assets/music.mp3" preload="auto" autoplay muted loop></audio>
+  <!-- 背景音乐默认关闭，点击「音乐」按钮开启 -->
+  <audio id="bgMusic" src="./assets/music.mp3" preload="none" loop></audio>
 
   <div class="container">
-    <h1>TOTP  (音乐自动播放)</h1>
+    <h1>TOTP 验证码</h1>
 
     <input type="text" id="secret" placeholder="在此输入两步密钥 (可含空格)" />
     <br />
     <button onclick="start()">开始生成 验证码</button>
+    <br />
+    <button id="music-toggle" onclick="toggleMusic()">音乐：关</button>
 
     <div id="code">尚未生成</div>
     <div id="error"></div>
@@ -124,7 +134,7 @@
       1) 纯JS HMAC-SHA1 (避免 Web Crypto 依赖)
       2) 每秒倒计时 & 30秒换一次 TOTP
       3) 自动复制 TOTP
-      4) 背景音乐: 静音自动播放 + 点击按钮后取消静音
+      4) 背景音乐: 默认关闭, 点击「音乐」按钮开关
     */
 
     const period = 30;
@@ -279,7 +289,8 @@
 
     // ====== 生成 TOTP (6位) ======
     function generateTOTP(secretB32) {
-      const sanitized = secretB32.replace(/\s+/g, "").toUpperCase();
+      // 去掉空格、短横线和 Base32 末尾的 "=" 填充
+      const sanitized = secretB32.replace(/[\s-]+/g, "").replace(/=+$/, "").toUpperCase();
       const keyBytes = base32Decode(sanitized);
 
       const nowSec = Math.floor(Date.now() / 1000);
@@ -313,9 +324,14 @@
         textArea.value = text;
         document.body.appendChild(textArea);
         textArea.select();
-        document.execCommand("copy");
+        let ok = false;
+        try {
+          ok = document.execCommand("copy");
+        } catch (e) {
+          ok = false;
+        }
         document.body.removeChild(textArea);
-        return Promise.resolve();
+        return ok ? Promise.resolve() : Promise.reject(new Error("copy failed"));
       }
     }
 
@@ -357,7 +373,12 @@
           if (otp !== lastOTP) {
             lastOTP = otp;
             copyToClipboard(otp).then(() => {
+              copyMsgEl.style.color = "green";
               copyMsgEl.textContent = `已复制验证码: ${otp}`;
+            }).catch(() => {
+              copyMsgEl.style.color = "#c77700";
+              copyMsgEl.textContent = "自动复制失败，请手动复制";
+            }).finally(() => {
               setTimeout(() => {
                 copyMsgEl.textContent = "";
               }, 2000);
@@ -373,15 +394,32 @@
       }
     }
 
-    // ====== 用户点击「开始」 => 取消静音 + 开启循环 ======
-    function start() {
+    // ====== 背景音乐开关 (默认关闭) ======
+    function toggleMusic() {
       const bgMusic = document.getElementById("bgMusic");
-      // 取消静音, 并调用 play()
-      bgMusic.muted = false;
-      bgMusic.play().catch((err) => {
-        console.warn("尝试取消静音播放时出错:", err);
-      });
+      const btn = document.getElementById("music-toggle");
+      if (bgMusic.paused) {
+        bgMusic.play().then(() => {
+          btn.textContent = "音乐：开";
+        }).catch((err) => {
+          console.warn("播放背景音乐出错:", err);
+        });
+      } else {
+        bgMusic.pause();
+        btn.textContent = "音乐：关";
+      }
+    }
 
+    // ====== 修改密钥后立即重新生成 ======
+    document.getElementById("secret").addEventListener("input", () => {
+      if (!intervalId) return;
+      currentTimeStep = -1;
+      lastOTP = "";
+      updateUI();
+    });
+
+    // ====== 用户点击「开始」 => 开启循环 ======
+    function start() {
       if (intervalId) clearInterval(intervalId);
       currentTimeStep = -1;
       lastOTP = "";
